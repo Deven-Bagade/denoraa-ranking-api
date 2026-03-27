@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: denoraa-ranking-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: MODEL_PATH
+        value: denoraa_ranker_model.pkl
