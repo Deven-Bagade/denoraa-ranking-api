@@ -5,5 +5,6 @@ scikit-learn==1.8.0
 numpy==2.4.4
 pandas==3.0.1
 joblib==1.5.3
+gunicorn
 firebase-admin==6.3.0
 google-cloud-firestore==2.13.1
