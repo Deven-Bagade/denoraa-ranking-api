@@ -158,8 +158,9 @@ def rank():
             else:
                 feature_vector.append(float(value))
         
-        # Transform using preprocessor
-        X = preprocessor.transform([feature_vector])
+        # Convert the list to a DataFrame with the correct column names
+        df_features = pd.DataFrame([feature_vector], columns=feature_columns)
+        X = preprocessor.transform(df_features)
         score = float(model.predict(X)[0])
         
         return jsonify({
@@ -198,7 +199,8 @@ def rank_batch():
             feature_vectors.append(feature_vector)
         
         # Batch transform and predict
-        X = preprocessor.transform(feature_vectors)
+        df_features = pd.DataFrame(feature_vectors, columns=feature_columns)
+        X = preprocessor.transform(df_features)
         scores = model.predict(X).tolist()
         
         for i, provider in enumerate(providers):
