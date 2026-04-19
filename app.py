@@ -26,8 +26,10 @@ try:
     model = artifacts['model']
     preprocessor = artifacts['preprocessor']
     feature_columns = artifacts['feature_columns']
-    best_threshold = artifacts.get('best_threshold', 0.5)
+    # Convert numpy types to Python native types
+    best_threshold = float(artifacts.get('best_threshold', 0.5))
     print("✅ Model loaded successfully")
+    print(f"📊 Best threshold: {best_threshold}")
 except Exception as e:
     print(f"⚠️ Could not load model: {e}")
     model = None
@@ -42,10 +44,14 @@ except Exception as e:
 # Use environment variables for Firebase credentials
 firebase_credentials = os.environ.get('FIREBASE_CREDENTIALS')
 if firebase_credentials:
-    cred = credentials.Certificate(json.loads(firebase_credentials))
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print("✅ Firebase initialized")
+    try:
+        cred = credentials.Certificate(json.loads(firebase_credentials))
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("✅ Firebase initialized")
+    except Exception as e:
+        print(f"⚠️ Firebase initialization failed: {e}")
+        db = None
 else:
     print("⚠️ Firebase credentials not provided")
     db = None
@@ -57,32 +63,32 @@ else:
 def wilson_score(rating, n):
     """Calculate Wilson Score for reliability"""
     if n == 0:
-        return 0
+        return 0.0
     z = 1.96
-    p = rating / 5
+    p = rating / 5.0
     numerator = p + (z*z)/(2*n) - z * np.sqrt((p*(1-p) + (z*z)/(4*n)) / n)
     denominator = 1 + (z*z)/n
-    return numerator / denominator
+    return float(numerator / denominator)
 
 def extract_features(provider_data, request_data):
     """Extract features from provider and request data"""
     features = {}
     
     # Basic features
-    features['provider_rating'] = provider_data.get('providerRating', 5.0)
-    features['provider_total_jobs'] = provider_data.get('providerTotalJobs', 0)
-    features['provider_exp_months'] = provider_data.get('providerExpMonths', 0)
-    features['provider_price'] = provider_data.get('providerPrice', 0)
+    features['provider_rating'] = float(provider_data.get('providerRating', 5.0))
+    features['provider_total_jobs'] = int(provider_data.get('providerTotalJobs', 0))
+    features['provider_exp_months'] = int(provider_data.get('providerExpMonths', 0))
+    features['provider_price'] = float(provider_data.get('providerPrice', 0))
     features['provider_is_new'] = 1 if provider_data.get('providerTotalJobs', 0) < 10 else 0
-    features['provider_acceptance_rate'] = provider_data.get('providerAcceptanceRate', 0)
-    features['provider_response_rate'] = provider_data.get('providerResponseRate', 0)
-    features['provider_reliability_score'] = provider_data.get('providerReliabilityScore', 0.5)
-    features['provider_reports_count'] = provider_data.get('providerReportsCount', 0)
-    features['provider_complaints_count'] = provider_data.get('providerComplaintsCount', 0)
-    features['provider_cancellations_last_7d'] = provider_data.get('providerCancellationsLast7d', 0)
-    features['provider_no_shows_last_7d'] = provider_data.get('providerNoShowsLast7d', 0)
-    features['provider_ignores_last_7d'] = provider_data.get('providerIgnoresLast7d', 0)
-    features['provider_recent_risk'] = provider_data.get('providerRecentRisk', 0)
+    features['provider_acceptance_rate'] = float(provider_data.get('providerAcceptanceRate', 0))
+    features['provider_response_rate'] = float(provider_data.get('providerResponseRate', 0))
+    features['provider_reliability_score'] = float(provider_data.get('providerReliabilityScore', 0.5))
+    features['provider_reports_count'] = int(provider_data.get('providerReportsCount', 0))
+    features['provider_complaints_count'] = int(provider_data.get('providerComplaintsCount', 0))
+    features['provider_cancellations_last_7d'] = int(provider_data.get('providerCancellationsLast7d', 0))
+    features['provider_no_shows_last_7d'] = int(provider_data.get('providerNoShowsLast7d', 0))
+    features['provider_ignores_last_7d'] = int(provider_data.get('providerIgnoresLast7d', 0))
+    features['provider_recent_risk'] = float(provider_data.get('providerRecentRisk', 0))
     
     # Request features
     features['request_mode'] = request_data.get('requestMode', 'manual')
@@ -90,18 +96,18 @@ def extract_features(provider_data, request_data):
     features['category_lvl_1'] = request_data.get('categoryLvl1', '')
     features['category_lvl_2'] = request_data.get('categoryLvl2', '')
     features['category_lvl_3'] = request_data.get('categoryLvl3', '')
-    features['user_min_price'] = request_data.get('userMinPrice', 0)
-    features['user_max_price'] = request_data.get('userMaxPrice', 10000)
+    features['user_min_price'] = float(request_data.get('userMinPrice', 0))
+    features['user_max_price'] = float(request_data.get('userMaxPrice', 10000))
     
     # User features
     user_data = request_data.get('user', {})
-    features['user_reports_count'] = user_data.get('userReportsCount', 0)
-    features['user_complaints_count'] = user_data.get('userComplaintsCount', 0)
-    features['user_cancellations_last_7d'] = user_data.get('userCancellationsLast7d', 0)
+    features['user_reports_count'] = int(user_data.get('userReportsCount', 0))
+    features['user_complaints_count'] = int(user_data.get('userComplaintsCount', 0))
+    features['user_cancellations_last_7d'] = int(user_data.get('userCancellationsLast7d', 0))
     
     # Distance (provided by client or calculated)
-    features['distance_km'] = request_data.get('distanceKm', 5)
-    features['distance_score'] = request_data.get('distanceScore', 0.8)
+    features['distance_km'] = float(request_data.get('distanceKm', 5))
+    features['distance_score'] = float(request_data.get('distanceScore', 0.8))
     
     # Price match
     price_match = 1 if (features['provider_price'] >= features['user_min_price'] and 
@@ -110,14 +116,14 @@ def extract_features(provider_data, request_data):
     
     # Price diff
     if features['user_min_price'] > 0:
-        features['price_diff_percent'] = ((features['provider_price'] - features['user_min_price']) / features['user_min_price']) * 100
+        features['price_diff_percent'] = float(((features['provider_price'] - features['user_min_price']) / features['user_min_price']) * 100)
     else:
-        features['price_diff_percent'] = 0
+        features['price_diff_percent'] = 0.0
     
     if features['user_max_price'] > features['user_min_price']:
-        features['price_diff_normalised'] = (features['provider_price'] - features['user_min_price']) / (features['user_max_price'] - features['user_min_price'])
+        features['price_diff_normalised'] = float((features['provider_price'] - features['user_min_price']) / (features['user_max_price'] - features['user_min_price']))
     else:
-        features['price_diff_normalised'] = 0
+        features['price_diff_normalised'] = 0.0
     
     # Wilson Score
     features['wilson_score'] = wilson_score(features['provider_rating'], features['provider_total_jobs'])
@@ -165,11 +171,12 @@ def rank():
         
         return jsonify({
             'score': score,
-            'is_good_match': score >= best_threshold,
-            'wilson_score': features.get('wilson_score', 0)
+            'is_good_match': bool(score >= best_threshold),
+            'wilson_score': float(features.get('wilson_score', 0))
         })
         
     except Exception as e:
+        print(f"Error in /rank: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/rank_batch', methods=['POST'])
@@ -182,6 +189,9 @@ def rank_batch():
         data = request.json
         providers = data.get('providers', [])
         request_data = data.get('request', {})
+        
+        if not providers:
+            return jsonify({'error': 'No providers provided'}), 400
         
         results = []
         feature_vectors = []
@@ -206,8 +216,8 @@ def rank_batch():
         for i, provider in enumerate(providers):
             results.append({
                 'provider_id': provider.get('provider_id', provider.get('uid')),
-                'score': scores[i],
-                'is_good_match': scores[i] >= best_threshold
+                'score': float(scores[i]),
+                'is_good_match': bool(scores[i] >= best_threshold)
             })
         
         # Sort by score descending
@@ -215,10 +225,11 @@ def rank_batch():
         
         return jsonify({
             'results': results,
-            'best_threshold': best_threshold
+            'best_threshold': float(best_threshold)
         })
         
     except Exception as e:
+        print(f"Error in /rank_batch: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/wilson', methods=['POST'])
@@ -226,8 +237,8 @@ def wilson():
     """Calculate Wilson Score for a provider"""
     try:
         data = request.json
-        rating = data.get('rating', 5.0)
-        total_jobs = data.get('total_jobs', 0)
+        rating = float(data.get('rating', 5.0))
+        total_jobs = int(data.get('total_jobs', 0))
         
         score = wilson_score(rating, total_jobs)
         
@@ -238,6 +249,7 @@ def wilson():
         })
         
     except Exception as e:
+        print(f"Error in /wilson: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/providers/ranked', methods=['POST'])
@@ -281,6 +293,7 @@ def get_ranked_providers():
         return jsonify(response)
         
     except Exception as e:
+        print(f"Error in /providers/ranked: {e}")
         return jsonify({'error': str(e)}), 500
 
 def rank_batch_internal(providers, request_data):
@@ -310,17 +323,17 @@ def rank_batch_internal(providers, request_data):
         results.append({
             'provider_id': provider.get('provider_id'),
             'name': provider.get('username'),
-            'rating': provider.get('providerRating', 5.0),
-            'price': provider.get('providerPrice', 0),
-            'score': scores[i],
-            'is_good_match': scores[i] >= best_threshold
+            'rating': float(provider.get('providerRating', 5.0)),
+            'price': float(provider.get('providerPrice', 0)),
+            'score': float(scores[i]),
+            'is_good_match': bool(scores[i] >= best_threshold)
         })
     
     results.sort(key=lambda x: x['score'], reverse=True)
     
     return {
         'results': results,
-        'best_threshold': best_threshold,
+        'best_threshold': float(best_threshold),
         'count': len(results)
     }
 
@@ -330,4 +343,4 @@ def rank_batch_internal(providers, request_data):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
