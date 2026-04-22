@@ -17,8 +17,6 @@ CORS(app)
 
 print("🚀 Loading model artifacts...")
 
-# For development, load from local file
-# For production, you'll upload the model file to Render
 MODEL_PATH = os.environ.get('MODEL_PATH', 'denoraa_ranker_model.pkl')
 
 try:
@@ -26,7 +24,6 @@ try:
     model = artifacts['model']
     preprocessor = artifacts['preprocessor']
     feature_columns = artifacts['feature_columns']
-    # Convert numpy types to Python native types
     best_threshold = float(artifacts.get('best_threshold', 0.5))
     print("✅ Model loaded successfully")
     print(f"📊 Best threshold: {best_threshold}")
@@ -38,16 +35,9 @@ except Exception as e:
     best_threshold = 0.5
 
 # ============================================================
-# FIREBASE INITIALIZATION (Optional - for reading provider data)
+# FIREBASE INITIALIZATION
 # ============================================================
 
-# Use environment variables for Firebase credentials
-import os
-import json
-import firebase_admin
-from firebase_admin import credentials
-
-# Get Firebase credentials from environment variable
 firebase_credentials_str = os.environ.get('FIREBASE_CREDENTIALS')
 
 if firebase_credentials_str:
@@ -57,10 +47,6 @@ if firebase_credentials_str:
         firebase_admin.initialize_app(cred)
         db = firestore.client()
         print("✅ Firebase initialized successfully")
-    except json.JSONDecodeError as e:
-        print(f"⚠️ JSON decode error: {e}")
-        print(f"First 100 chars: {firebase_credentials_str[:100]}")
-        db = None
     except Exception as e:
         print(f"⚠️ Firebase initialization failed: {e}")
         db = None
@@ -73,7 +59,6 @@ else:
 # ============================================================
 
 def wilson_score(rating, n):
-    """Calculate Wilson Score for reliability"""
     if n == 0:
         return 0.0
     z = 1.96
@@ -83,10 +68,9 @@ def wilson_score(rating, n):
     return float(numerator / denominator)
 
 def extract_features(provider_data, request_data):
-    """Extract features from provider and request data"""
     features = {}
     
-    # Basic features
+    # Provider features
     features['provider_rating'] = float(provider_data.get('providerRating', 5.0))
     features['provider_total_jobs'] = int(provider_data.get('providerTotalJobs', 0))
     features['provider_exp_months'] = int(provider_data.get('providerExpMonths', 0))
@@ -117,7 +101,7 @@ def extract_features(provider_data, request_data):
     features['user_complaints_count'] = int(user_data.get('userComplaintsCount', 0))
     features['user_cancellations_last_7d'] = int(user_data.get('userCancellationsLast7d', 0))
     
-    # Distance (provided by client or calculated)
+    # Distance
     features['distance_km'] = float(request_data.get('distanceKm', 5))
     features['distance_score'] = float(request_data.get('distanceScore', 0.8))
     
@@ -137,7 +121,6 @@ def extract_features(provider_data, request_data):
     else:
         features['price_diff_normalised'] = 0.0
     
-    # Wilson Score
     features['wilson_score'] = wilson_score(features['provider_rating'], features['provider_total_jobs'])
     
     return features
@@ -148,7 +131,6 @@ def extract_features(provider_data, request_data):
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'model_loaded': model is not None
@@ -156,18 +138,14 @@ def health():
 
 @app.route('/rank', methods=['POST'])
 def rank():
-    """Rank a single provider"""
     if model is None:
         return jsonify({'error': 'Model not loaded'}), 500
-    
     try:
         data = request.json
         provider = data.get('provider', {})
         request_data = data.get('request', {})
-        
         features = extract_features(provider, request_data)
         
-        # Create feature vector in correct order
         feature_vector = []
         for col in feature_columns:
             value = features.get(col, 0)
@@ -176,7 +154,6 @@ def rank():
             else:
                 feature_vector.append(float(value))
         
-        # Convert the list to a DataFrame with the correct column names
         df_features = pd.DataFrame([feature_vector], columns=feature_columns)
         X = preprocessor.transform(df_features)
         score = float(model.predict(X)[0])
@@ -186,17 +163,14 @@ def rank():
             'is_good_match': bool(score >= best_threshold),
             'wilson_score': float(features.get('wilson_score', 0))
         })
-        
     except Exception as e:
         print(f"Error in /rank: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/rank_batch', methods=['POST'])
 def rank_batch():
-    """Rank multiple providers at once"""
     if model is None:
         return jsonify({'error': 'Model not loaded'}), 500
-    
     try:
         data = request.json
         providers = data.get('providers', [])
@@ -205,12 +179,9 @@ def rank_batch():
         if not providers:
             return jsonify({'error': 'No providers provided'}), 400
         
-        results = []
         feature_vectors = []
-        
         for provider in providers:
             features = extract_features(provider, request_data)
-            
             feature_vector = []
             for col in feature_columns:
                 value = features.get(col, 0)
@@ -220,11 +191,11 @@ def rank_batch():
                     feature_vector.append(float(value))
             feature_vectors.append(feature_vector)
         
-        # Batch transform and predict
         df_features = pd.DataFrame(feature_vectors, columns=feature_columns)
         X = preprocessor.transform(df_features)
         scores = model.predict(X).tolist()
         
+        results = []
         for i, provider in enumerate(providers):
             results.append({
                 'provider_id': provider.get('provider_id', provider.get('uid')),
@@ -232,88 +203,90 @@ def rank_batch():
                 'is_good_match': bool(scores[i] >= best_threshold)
             })
         
-        # Sort by score descending
         results.sort(key=lambda x: x['score'], reverse=True)
         
         return jsonify({
             'results': results,
             'best_threshold': float(best_threshold)
         })
-        
     except Exception as e:
         print(f"Error in /rank_batch: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/wilson', methods=['POST'])
 def wilson():
-    """Calculate Wilson Score for a provider"""
     try:
         data = request.json
         rating = float(data.get('rating', 5.0))
         total_jobs = int(data.get('total_jobs', 0))
-        
         score = wilson_score(rating, total_jobs)
-        
         return jsonify({
             'wilson_score': score,
             'rating': rating,
             'total_jobs': total_jobs
         })
-        
     except Exception as e:
         print(f"Error in /wilson: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/providers/ranked', methods=['POST'])
 def get_ranked_providers():
-    """Get ranked list of providers for a request"""
     if db is None:
         return jsonify({'error': 'Firebase not configured'}), 500
     
     try:
         data = request.json
-        category_lvl1 = data.get('categoryLvl1')
+        category_lvl1 = data.get('categoryLvl1', '')
+        category_lvl2 = data.get('categoryLvl2', '')
+        category_lvl3 = data.get('categoryLvl3', '')
         user_min_price = float(data.get('userMinPrice', 0))
         user_max_price = float(data.get('userMaxPrice', 10000))
         
-        print(f"🔍 Fetching providers for category: {category_lvl1}")
+        print(f"🔍 Fetching providers for: lvl1={category_lvl1}, lvl2={category_lvl2}, lvl3={category_lvl3}")
         
-        # Query providers from Firestore
+        # Get verified providers
         providers_ref = db.collection('providers')
-        providers = []
-        
-        # Get all verified providers
         docs = providers_ref.where('isVerified', '==', True).limit(50).stream()
         
+        eligible_providers = []
         for doc in docs:
-            provider_data = doc.to_dict()
-            provider_data['provider_id'] = doc.id
+            provider = doc.to_dict()
+            provider['provider_id'] = doc.id
+            services = provider.get('services', [])
             
-            # Check if provider offers this service category
-            services = provider_data.get('services', [])
-            offers_service = False
-            for service in services:
-                if service.get('level1Id') == category_lvl1:
-                    offers_service = True
+            # Check if provider offers the requested service (any level)
+            offers = False
+            for s in services:
+                # Level 3 match (most specific)
+                if category_lvl3 and s.get('level3Id') == category_lvl3:
+                    offers = True
+                    break
+                # Level 2 match
+                if category_lvl2 and not offers and s.get('level2Id') == category_lvl2:
+                    offers = True
+                    break
+                # Level 1 match
+                if category_lvl1 and not offers and s.get('level1Id') == category_lvl1:
+                    offers = True
                     break
             
-            if offers_service:
-                providers.append(provider_data)
-                print(f"  ✅ Found: {provider_data.get('username')} - Price: {provider_data.get('providerPrice')}")
+            if offers:
+                eligible_providers.append(provider)
+                print(f"  ✅ Found: {provider.get('username')} - Price: {provider.get('providerPrice')}")
         
-        if not providers:
+        if not eligible_providers:
             return jsonify({
                 'error': 'No providers found for this category',
                 'count': 0
             }), 404
         
-        # Prepare request data for ranking
+        # Prepare request data for ranking (include all levels)
         request_data = {
             'requestMode': 'manual',
             'isUrgent': False,
             'categoryLvl1': category_lvl1,
-            'categoryLvl2': '',
-            'categoryLvl3': '',
+            'categoryLvl2': category_lvl2,
+            'categoryLvl3': category_lvl3,
             'userMinPrice': user_min_price,
             'userMaxPrice': user_max_price,
             'user': {
@@ -325,12 +298,10 @@ def get_ranked_providers():
             'distanceScore': 0.8
         }
         
-        # Rank providers
+        # Rank each provider
         ranked_results = []
-        for provider in providers:
+        for provider in eligible_providers:
             features = extract_features(provider, request_data)
-            
-            # Create feature vector
             feature_vector = []
             for col in feature_columns:
                 value = features.get(col, 0)
@@ -339,7 +310,6 @@ def get_ranked_providers():
                 else:
                     feature_vector.append(float(value))
             
-            # Convert to DataFrame properly
             df_features = pd.DataFrame([feature_vector], columns=feature_columns)
             X = preprocessor.transform(df_features)
             score = float(model.predict(X)[0])
@@ -353,7 +323,6 @@ def get_ranked_providers():
                 'is_good_match': bool(score >= best_threshold)
             })
         
-        # Sort by score
         ranked_results.sort(key=lambda x: x['score'], reverse=True)
         
         return jsonify({
@@ -369,16 +338,12 @@ def get_ranked_providers():
         return jsonify({'error': str(e)}), 500
 
 def rank_batch_internal(providers, request_data):
-    """Internal function to rank providers"""
     if model is None:
         return {'error': 'Model not loaded'}
     
-    results = []
     feature_vectors = []
-    
     for provider in providers:
         features = extract_features(provider, request_data)
-        
         feature_vector = []
         for col in feature_columns:
             value = features.get(col, 0)
@@ -391,6 +356,7 @@ def rank_batch_internal(providers, request_data):
     X = preprocessor.transform(feature_vectors)
     scores = model.predict(X).tolist()
     
+    results = []
     for i, provider in enumerate(providers):
         results.append({
             'provider_id': provider.get('provider_id'),
@@ -402,7 +368,6 @@ def rank_batch_internal(providers, request_data):
         })
     
     results.sort(key=lambda x: x['score'], reverse=True)
-    
     return {
         'results': results,
         'best_threshold': float(best_threshold),
