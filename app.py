@@ -42,13 +42,25 @@ except Exception as e:
 # ============================================================
 
 # Use environment variables for Firebase credentials
-firebase_credentials = os.environ.get('FIREBASE_CREDENTIALS')
-if firebase_credentials:
+import os
+import json
+import firebase_admin
+from firebase_admin import credentials
+
+# Get Firebase credentials from environment variable
+firebase_credentials_str = os.environ.get('FIREBASE_CREDENTIALS')
+
+if firebase_credentials_str:
     try:
-        cred = credentials.Certificate(json.loads(firebase_credentials))
+        cred_dict = json.loads(firebase_credentials_str)
+        cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
         db = firestore.client()
-        print("✅ Firebase initialized")
+        print("✅ Firebase initialized successfully")
+    except json.JSONDecodeError as e:
+        print(f"⚠️ JSON decode error: {e}")
+        print(f"First 100 chars: {firebase_credentials_str[:100]}")
+        db = None
     except Exception as e:
         print(f"⚠️ Firebase initialization failed: {e}")
         db = None
