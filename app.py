@@ -272,40 +272,100 @@ def get_ranked_providers():
     
     try:
         data = request.json
-        category = data.get('categoryLvl1')
-        user_location = data.get('userLocation')
-        radius_km = data.get('radiusKm', 10)
-        user_min_price = data.get('userMinPrice', 0)
-        user_max_price = data.get('userMaxPrice', 10000)
+        category_lvl1 = data.get('categoryLvl1')
+        user_min_price = float(data.get('userMinPrice', 0))
+        user_max_price = float(data.get('userMaxPrice', 10000))
+        
+        print(f"🔍 Fetching providers for category: {category_lvl1}")
         
         # Query providers from Firestore
         providers_ref = db.collection('providers')
         providers = []
         
-        # Simple query (you can add more filters)
-        query = providers_ref.where('isVerified', '==', True).limit(50)
-        docs = query.stream()
+        # Get all verified providers
+        docs = providers_ref.where('isVerified', '==', True).limit(50).stream()
         
         for doc in docs:
             provider_data = doc.to_dict()
             provider_data['provider_id'] = doc.id
-            providers.append(provider_data)
+            
+            # Check if provider offers this service category
+            services = provider_data.get('services', [])
+            offers_service = False
+            for service in services:
+                if service.get('level1Id') == category_lvl1:
+                    offers_service = True
+                    break
+            
+            if offers_service:
+                providers.append(provider_data)
+                print(f"  ✅ Found: {provider_data.get('username')} - Price: {provider_data.get('providerPrice')}")
+        
+        if not providers:
+            return jsonify({
+                'error': 'No providers found for this category',
+                'count': 0
+            }), 404
         
         # Prepare request data for ranking
         request_data = {
-            'categoryLvl1': category,
+            'requestMode': 'manual',
+            'isUrgent': False,
+            'categoryLvl1': category_lvl1,
+            'categoryLvl2': '',
+            'categoryLvl3': '',
             'userMinPrice': user_min_price,
             'userMaxPrice': user_max_price,
-            'userLocation': user_location
+            'user': {
+                'userReportsCount': 0,
+                'userComplaintsCount': 0,
+                'userCancellationsLast7d': 0
+            },
+            'distanceKm': 5.0,
+            'distanceScore': 0.8
         }
         
         # Rank providers
-        response = rank_batch_internal(providers, request_data)
+        ranked_results = []
+        for provider in providers:
+            features = extract_features(provider, request_data)
+            
+            # Create feature vector
+            feature_vector = []
+            for col in feature_columns:
+                value = features.get(col, 0)
+                if isinstance(value, str):
+                    feature_vector.append(value)
+                else:
+                    feature_vector.append(float(value))
+            
+            # Convert to DataFrame properly
+            df_features = pd.DataFrame([feature_vector], columns=feature_columns)
+            X = preprocessor.transform(df_features)
+            score = float(model.predict(X)[0])
+            
+            ranked_results.append({
+                'provider_id': provider.get('provider_id'),
+                'name': provider.get('username'),
+                'rating': float(provider.get('providerRating', 5.0)),
+                'price': float(provider.get('providerPrice', 0)),
+                'score': score,
+                'is_good_match': bool(score >= best_threshold)
+            })
         
-        return jsonify(response)
+        # Sort by score
+        ranked_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        return jsonify({
+            'results': ranked_results,
+            'count': len(ranked_results),
+            'best_threshold': float(best_threshold)
+        })
         
     except Exception as e:
-        print(f"Error in /providers/ranked: {e}")
+        print(f"❌ Error in /providers/ranked: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 def rank_batch_internal(providers, request_data):
